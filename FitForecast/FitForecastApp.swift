@@ -1,3 +1,4 @@
+
 //
 //  FitForecastApp.swift
 //  FitForecast
@@ -9,9 +10,13 @@ import SwiftUI
 
 @main
 struct FitForecastApp: App {
+    // Initialize the PersistenceManager
+    let persistenceManager = PersistenceManager.shared
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(\.managedObjectContext, persistenceManager.container.viewContext)
         }
     }
 }
