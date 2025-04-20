@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  FitForecast
 //
-//  Created by Ashish Kumar on 30/03/25.
+//  Created by Ashish Kumar/ Manan Gulati on 30/03/25.
 //
 
 import SwiftUI
