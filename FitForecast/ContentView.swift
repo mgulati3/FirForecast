@@ -8,13 +8,29 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import CoreData
 
 // MARK: - MODEL
 struct Outfit: Identifiable {
-    let id = UUID()
+    let id: UUID
     let name: String
     let description: String
     let imageName: String
+    
+    init(id: UUID = UUID(), name: String, description: String, imageName: String) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.imageName = imageName
+    }
+    
+    // Convert from CoreData entity
+    init(entity: OutfitEntity) {
+        self.id = entity.id ?? UUID()
+        self.name = entity.name ?? ""
+        self.description = entity.desc ?? ""
+        self.imageName = entity.imageName ?? ""
+    }
 }
 
 struct WeatherResponse: Codable {
@@ -94,9 +110,62 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
 class OutfitViewModel: ObservableObject {
     @Published var savedOutfits: [Outfit] = []
     @Published var currentWeather: String = "Fetching weather..."
-
+    private var viewContext: NSManagedObjectContext
+    
+    init(context: NSManagedObjectContext) {
+        self.viewContext = context
+        fetchOutfitsFromCoreData()
+    }
+    
+    // Save an outfit to Core Data
     func saveOutfit(_ outfit: Outfit) {
-        savedOutfits.append(outfit)
+        let newOutfit = OutfitEntity(context: viewContext)
+        newOutfit.id = outfit.id
+        newOutfit.name = outfit.name
+        newOutfit.desc = outfit.description
+        newOutfit.imageName = outfit.imageName
+        
+        do {
+            try viewContext.save()
+            fetchOutfitsFromCoreData()
+        } catch {
+            print("Error saving outfit to Core Data: \(error.localizedDescription)")
+        }
+    }
+    
+    // Remove an outfit from Core Data
+    func removeOutfit(at index: Int) {
+        guard index >= 0 && index < savedOutfits.count else { return }
+        
+        let outfitToDelete = savedOutfits[index]
+        
+        // Find and delete the entity with matching ID
+        let fetchRequest: NSFetchRequest<OutfitEntity> = OutfitEntity.fetchRequest()
+        fetchRequest.predicate = NSPredicate(format: "id == %@", outfitToDelete.id as CVarArg)
+        
+        do {
+            let results = try viewContext.fetch(fetchRequest)
+            for entity in results {
+                viewContext.delete(entity)
+            }
+            try viewContext.save()
+            fetchOutfitsFromCoreData()
+        } catch {
+            print("Error deleting outfit: \(error.localizedDescription)")
+        }
+    }
+    
+    // Fetch all outfits from Core Data
+    func fetchOutfitsFromCoreData() {
+        let fetchRequest: NSFetchRequest<OutfitEntity> = OutfitEntity.fetchRequest()
+        
+        do {
+            let outfitEntities = try viewContext.fetch(fetchRequest)
+            self.savedOutfits = outfitEntities.map { Outfit(entity: $0) }
+        } catch {
+            print("Error fetching outfits: \(error.localizedDescription)")
+            self.savedOutfits = []
+        }
     }
 
     func fetchWeather(for city: String) {
@@ -142,6 +211,63 @@ class OutfitViewModel: ObservableObject {
     }
 }
 
+// MARK: - PREFERENCES VIEWMODEL
+class PreferencesViewModel: ObservableObject {
+    @Published var weatherSensitivity: Double = 0.5
+    @Published var prefersCasual: Bool = true
+    private var viewContext: NSManagedObjectContext
+    
+    init(context: NSManagedObjectContext) {
+        self.viewContext = context
+        loadPreferences()
+    }
+    
+    func loadPreferences() {
+        let fetchRequest: NSFetchRequest<UserPreferencesEntity> = UserPreferencesEntity.fetchRequest()
+        fetchRequest.fetchLimit = 1
+        
+        do {
+            let results = try viewContext.fetch(fetchRequest)
+            if let preferences = results.first {
+                self.weatherSensitivity = preferences.weatherSensitivity
+                self.prefersCasual = preferences.prefersCasual
+            } else {
+                // Create default preferences if none exist
+                savePreferences()
+            }
+        } catch {
+            print("Error loading preferences: \(error.localizedDescription)")
+        }
+    }
+    
+    func savePreferences() {
+        // Check if preferences already exist
+        let fetchRequest: NSFetchRequest<UserPreferencesEntity> = UserPreferencesEntity.fetchRequest()
+        
+        do {
+            let results = try viewContext.fetch(fetchRequest)
+            let preferences: UserPreferencesEntity
+            
+            if let existingPrefs = results.first {
+                // Update existing preferences
+                preferences = existingPrefs
+            } else {
+                // Create new preferences
+                preferences = UserPreferencesEntity(context: viewContext)
+                preferences.id = "user_preferences"
+            }
+            
+            // Set values
+            preferences.weatherSensitivity = self.weatherSensitivity
+            preferences.prefersCasual = self.prefersCasual
+            
+            try viewContext.save()
+        } catch {
+            print("Error saving preferences: \(error.localizedDescription)")
+        }
+    }
+}
+
 // MARK: - CUSTOM BUTTON STYLE
 struct RoundedGradientButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -165,9 +291,10 @@ struct RoundedGradientButtonStyle: ButtonStyle {
 
 // MARK: - MAIN CONTENT VIEW
 struct ContentView: View {
-    @StateObject private var viewModel = OutfitViewModel()
+    @Environment(\.managedObjectContext) private var viewContext
     @StateObject private var locationManager = LocationManager()
-
+    
+    // Initialize ViewModels with Core Data context
     var body: some View {
         TabView {
             NavigationStack {
@@ -191,10 +318,27 @@ struct ContentView: View {
                 Label("Alerts", systemImage: "bell")
             }
         }
-        .environmentObject(viewModel)
+        .environmentObject(OutfitViewModel(context: viewContext))
         .environmentObject(locationManager)
+        .environmentObject(PreferencesViewModel(context: viewContext))
         .preferredColorScheme(.dark)
         .background(Color.black.ignoresSafeArea())
+    }
+}
+
+// MARK: - USER DEFAULTS EXTENSION FOR LAST CITY
+extension UserDefaults {
+    static let lastCityKey = "lastUsedCity"
+    static let notificationsKey = "notificationsEnabled"
+    
+    var lastUsedCity: String {
+        get { string(forKey: UserDefaults.lastCityKey) ?? "" }
+        set { set(newValue, forKey: UserDefaults.lastCityKey) }
+    }
+    
+    var notificationsEnabled: Bool {
+        get { bool(forKey: UserDefaults.notificationsKey) }
+        set { set(newValue, forKey: UserDefaults.notificationsKey) }
     }
 }
 
@@ -203,7 +347,7 @@ struct WelcomeView: View {
     @EnvironmentObject var viewModel: OutfitViewModel
     @EnvironmentObject var locationManager: LocationManager
     @State private var cityName: String = ""
-
+    
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -230,6 +374,11 @@ struct WelcomeView: View {
                 TextField("Enter City Name", text: $cityName)
                     .textFieldStyle(.roundedBorder)
                     .padding(.horizontal, 40)
+                    .onAppear {
+                        if !UserDefaults.standard.lastUsedCity.isEmpty {
+                            cityName = UserDefaults.standard.lastUsedCity
+                        }
+                    }
 
                 Button("Allow Location") {
                     locationManager.requestLocation()
@@ -246,6 +395,13 @@ struct WelcomeView: View {
                     Text("Let's Begin")
                 }
                 .buttonStyle(RoundedGradientButtonStyle())
+                .simultaneousGesture(TapGesture().onEnded {
+                    // Save the city name when the user proceeds
+                    let cityToSave = cityName.isEmpty ? locationManager.currentCity : cityName
+                    if !cityToSave.isEmpty {
+                        UserDefaults.standard.lastUsedCity = cityToSave
+                    }
+                })
 
                 Spacer()
             }
@@ -334,25 +490,26 @@ struct HomeView: View {
 
 // MARK: - Preferences View
 struct PreferencesView: View {
-    @State private var weatherSensitivity: Double = 0.5
-    @State private var prefersCasual: Bool = true
+    @EnvironmentObject private var preferencesViewModel: PreferencesViewModel
 
     var body: some View {
         Form {
             Section(header: Text("Weather Sensitivity")) {
-                Slider(value: $weatherSensitivity, in: 0...1)
+                Slider(value: $preferencesViewModel.weatherSensitivity, in: 0...1)
+                    .onChange(of: preferencesViewModel.weatherSensitivity) { _ in
+                        preferencesViewModel.savePreferences()
+                    }
             }
             Section(header: Text("Outfit Style")) {
-                Toggle("Prefer Casual Outfits", isOn: $prefersCasual)
+                Toggle("Prefer Casual Outfits", isOn: $preferencesViewModel.prefersCasual)
+                    .onChange(of: preferencesViewModel.prefersCasual) { _ in
+                        preferencesViewModel.savePreferences()
+                    }
             }
         }
         .navigationTitle("Preferences")
     }
 }
-
-// MARK: - Remaining Views
-// Same as previous: OutfitDetailView, OutfitSavedConfirmationView, SavedOutfitsView, NotificationView, and ContentView_Previews.
-
 
 // MARK: - OUTFIT DETAIL VIEW
 struct OutfitDetailView: View {
@@ -422,6 +579,8 @@ struct OutfitSavedConfirmationView: View {
 // MARK: - SAVED OUTFITS VIEW
 struct SavedOutfitsView: View {
     @EnvironmentObject var viewModel: OutfitViewModel
+    @State private var showDeleteAlert = false
+    @State private var outfitToDelete: IndexSet?
 
     var body: some View {
         ZStack {
@@ -434,33 +593,60 @@ struct SavedOutfitsView: View {
                         .padding()
                         .foregroundColor(.gray)
                 } else {
-                    List(viewModel.savedOutfits) { outfit in
-                        HStack {
-                            Image(systemName: outfit.imageName)
-                                .resizable()
-                                .frame(width: 40, height: 40)
-                                .foregroundColor(.blue)
-                            VStack(alignment: .leading) {
-                                Text(outfit.name)
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                Text(outfit.description)
-                                    .font(.subheadline)
-                                    .foregroundColor(.gray)
+                    List {
+                        ForEach(viewModel.savedOutfits) { outfit in
+                            HStack {
+                                Image(systemName: outfit.imageName)
+                                    .resizable()
+                                    .frame(width: 40, height: 40)
+                                    .foregroundColor(.blue)
+                                VStack(alignment: .leading) {
+                                    Text(outfit.name)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Text(outfit.description)
+                                        .font(.subheadline)
+                                        .foregroundColor(.gray)
+                                }
                             }
+                            .listRowBackground(Color.black)
                         }
-                        .listRowBackground(Color.black)
+                        .onDelete { indexSet in
+                            outfitToDelete = indexSet
+                            showDeleteAlert = true
+                        }
                     }
                     .scrollContentBackground(.hidden)
+                    .alert(isPresented: $showDeleteAlert) {
+                        Alert(
+                            title: Text("Delete Outfit"),
+                            message: Text("Are you sure you want to delete this outfit?"),
+                            primaryButton: .destructive(Text("Delete")) {
+                                if let indexSet = outfitToDelete, let index = indexSet.first {
+                                    viewModel.removeOutfit(at: index)
+                                }
+                            },
+                            secondaryButton: .cancel()
+                        )
+                    }
                 }
             }
             .navigationTitle("Saved Outfits")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    EditButton()
+                        .foregroundColor(.white)
+                        .opacity(viewModel.savedOutfits.isEmpty ? 0 : 1)
+                }
+            }
         }
     }
 }
 
 // MARK: - NOTIFICATION VIEW
 struct NotificationView: View {
+    @State private var notificationsEnabled: Bool = UserDefaults.standard.notificationsEnabled
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -470,9 +656,29 @@ struct NotificationView: View {
                     .font(.largeTitle)
                     .padding(.top, 40)
                     .foregroundColor(.white)
-                Text("No new notifications.")
-                    .font(.body)
-                    .foregroundColor(.gray)
+                
+                Toggle("Enable Daily Weather Alerts", isOn: $notificationsEnabled)
+                    .padding()
+                    .foregroundColor(.white)
+                    .background(Color.gray.opacity(0.3))
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                    .onChange(of: notificationsEnabled) { newValue in
+                        UserDefaults.standard.notificationsEnabled = newValue
+                    }
+                
+                if notificationsEnabled {
+                    Text("You will receive daily outfit recommendations based on weather.")
+                        .font(.body)
+                        .foregroundColor(.green)
+                        .padding(.horizontal)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("No new notifications.")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                }
+                
                 Spacer()
             }
             .padding()
@@ -484,7 +690,8 @@ struct NotificationView: View {
 // MARK: - PREVIEW
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
+        let persistenceManager = PersistenceManager.shared
         ContentView()
+            .environment(\.managedObjectContext, persistenceManager.container.viewContext)
     }
 }
-
