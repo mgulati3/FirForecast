@@ -10,6 +10,9 @@ import MapKit
 import CoreLocation
 import CoreData
 
+
+
+
 // MARK: - MODEL
 struct Outfit: Identifiable {
     let id: UUID
@@ -24,7 +27,9 @@ struct Outfit: Identifiable {
         self.imageName = imageName
     }
     
-    // Convert from CoreData entity
+    
+    
+    
     init(entity: OutfitEntity) {
         self.id = entity.id ?? UUID()
         self.name = entity.name ?? ""
@@ -32,6 +37,8 @@ struct Outfit: Identifiable {
         self.imageName = entity.imageName ?? ""
     }
 }
+
+
 
 struct WeatherResponse: Codable {
     struct Current: Codable {
@@ -47,34 +54,44 @@ struct WeatherResponse: Codable {
     let current: Current
 }
 
+
+
+
+
+
+
+
 // MARK: - LOCATION MANAGER
 class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let locationManager = CLLocationManager()
     private let geocoder = CLGeocoder()
 
+    
     @Published var currentCity: String = ""
     @Published var locationPermissionDenied = false
 
-    // ✅ New: track live region
     @Published var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.334722, longitude: -122.008889),
         span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
     )
 
+    
+    
     override init() {
         super.init()
         locationManager.delegate = self
     }
 
+    
     func requestLocation() {
         locationManager.requestWhenInUseAuthorization()
         locationManager.requestLocation()
     }
 
+    
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.first else { return }
 
-        // ✅ Update the map region
         DispatchQueue.main.async {
             self.region = MKCoordinateRegion(
                 center: location.coordinate,
@@ -85,6 +102,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         reverseGeocode(location)
     }
 
+    
     func reverseGeocode(_ location: CLLocation) {
         geocoder.reverseGeocodeLocation(location) { placemarks, error in
             if let city = placemarks?.first?.locality {
@@ -95,16 +113,26 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         print("Location error: \(error.localizedDescription)")
     }
 
+    
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if manager.authorizationStatus == .denied {
             locationPermissionDenied = true
         }
     }
 }
+
+
+
+
+
+
+
+
 
 // MARK: - VIEWMODEL
 class OutfitViewModel: ObservableObject {
@@ -117,7 +145,7 @@ class OutfitViewModel: ObservableObject {
         fetchOutfitsFromCoreData()
     }
     
-    // Save an outfit to Core Data
+    
     func saveOutfit(_ outfit: Outfit) {
         let newOutfit = OutfitEntity(context: viewContext)
         newOutfit.id = outfit.id
@@ -133,7 +161,9 @@ class OutfitViewModel: ObservableObject {
         }
     }
     
-    // Remove an outfit from Core Data
+    
+    
+    
     func removeOutfit(at index: Int) {
         guard index >= 0 && index < savedOutfits.count else { return }
         
@@ -155,7 +185,7 @@ class OutfitViewModel: ObservableObject {
         }
     }
     
-    // Fetch all outfits from Core Data
+    
     func fetchOutfitsFromCoreData() {
         let fetchRequest: NSFetchRequest<OutfitEntity> = OutfitEntity.fetchRequest()
         
@@ -180,6 +210,8 @@ class OutfitViewModel: ObservableObject {
             return
         }
 
+        
+        
         URLSession.shared.dataTask(with: url) { data, _, error in
             if let error = error {
                 DispatchQueue.main.async {
@@ -211,6 +243,10 @@ class OutfitViewModel: ObservableObject {
     }
 }
 
+
+
+
+
 // MARK: - PREFERENCES VIEWMODEL
 class PreferencesViewModel: ObservableObject {
     @Published var weatherSensitivity: Double = 0.5
@@ -232,7 +268,6 @@ class PreferencesViewModel: ObservableObject {
                 self.weatherSensitivity = preferences.weatherSensitivity
                 self.prefersCasual = preferences.prefersCasual
             } else {
-                // Create default preferences if none exist
                 savePreferences()
             }
         } catch {
@@ -240,8 +275,9 @@ class PreferencesViewModel: ObservableObject {
         }
     }
     
+    
+    
     func savePreferences() {
-        // Check if preferences already exist
         let fetchRequest: NSFetchRequest<UserPreferencesEntity> = UserPreferencesEntity.fetchRequest()
         
         do {
@@ -249,15 +285,12 @@ class PreferencesViewModel: ObservableObject {
             let preferences: UserPreferencesEntity
             
             if let existingPrefs = results.first {
-                // Update existing preferences
                 preferences = existingPrefs
             } else {
-                // Create new preferences
                 preferences = UserPreferencesEntity(context: viewContext)
                 preferences.id = "user_preferences"
             }
             
-            // Set values
             preferences.weatherSensitivity = self.weatherSensitivity
             preferences.prefersCasual = self.prefersCasual
             
@@ -267,6 +300,13 @@ class PreferencesViewModel: ObservableObject {
         }
     }
 }
+
+
+
+
+
+
+
 
 // MARK: - CUSTOM BUTTON STYLE
 struct RoundedGradientButtonStyle: ButtonStyle {
@@ -289,12 +329,17 @@ struct RoundedGradientButtonStyle: ButtonStyle {
     }
 }
 
+
+
+
+
+
 // MARK: - MAIN CONTENT VIEW
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject private var locationManager = LocationManager()
     
-    // Initialize ViewModels with Core Data context
+    
     var body: some View {
         TabView {
             NavigationStack {
@@ -326,6 +371,12 @@ struct ContentView: View {
     }
 }
 
+
+
+
+
+
+
 // MARK: - USER DEFAULTS EXTENSION FOR LAST CITY
 extension UserDefaults {
     static let lastCityKey = "lastUsedCity"
@@ -342,11 +393,20 @@ extension UserDefaults {
     }
 }
 
+
+
+
+
+
 // MARK: - WELCOME VIEW
 struct WelcomeView: View {
+    
     @EnvironmentObject var viewModel: OutfitViewModel
     @EnvironmentObject var locationManager: LocationManager
     @State private var cityName: String = ""
+    
+    
+    
     
     var body: some View {
         ZStack {
@@ -365,7 +425,6 @@ struct WelcomeView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 30)
 
-                // BIND MapKit view to real-time user region
                 Map(coordinateRegion: $locationManager.region)
                     .frame(height: 200)
                     .cornerRadius(10)
@@ -396,7 +455,6 @@ struct WelcomeView: View {
                 }
                 .buttonStyle(RoundedGradientButtonStyle())
                 .simultaneousGesture(TapGesture().onEnded {
-                    // Save the city name when the user proceeds
                     let cityToSave = cityName.isEmpty ? locationManager.currentCity : cityName
                     if !cityToSave.isEmpty {
                         UserDefaults.standard.lastUsedCity = cityToSave
@@ -410,6 +468,12 @@ struct WelcomeView: View {
         }
     }
 }
+
+
+
+
+
+
 
 // MARK: - HOME VIEW
 struct HomeView: View {
@@ -511,6 +575,11 @@ struct PreferencesView: View {
     }
 }
 
+
+
+
+
+
 // MARK: - OUTFIT DETAIL VIEW
 struct OutfitDetailView: View {
     @EnvironmentObject var viewModel: OutfitViewModel
@@ -555,6 +624,9 @@ struct OutfitDetailView: View {
     }
 }
 
+
+
+
 // MARK: - OUTFIT SAVED CONFIRMATION VIEW
 struct OutfitSavedConfirmationView: View {
     var body: some View {
@@ -575,6 +647,9 @@ struct OutfitSavedConfirmationView: View {
         }
     }
 }
+
+
+
 
 // MARK: - SAVED OUTFITS VIEW
 struct SavedOutfitsView: View {
@@ -643,6 +718,11 @@ struct SavedOutfitsView: View {
     }
 }
 
+
+
+
+
+
 // MARK: - NOTIFICATION VIEW
 struct NotificationView: View {
     @State private var notificationsEnabled: Bool = UserDefaults.standard.notificationsEnabled
@@ -686,6 +766,10 @@ struct NotificationView: View {
         }
     }
 }
+
+
+
+
 
 // MARK: - PREVIEW
 struct ContentView_Previews: PreviewProvider {
