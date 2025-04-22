@@ -66,15 +66,6 @@
 
 ---
 
-## 🔐 API Key
-
-This app uses [WeatherAPI](https://www.weatherapi.com/). Register for a free API key and add it here:
-
-```swift
-let apiKey = "your-api-key"
-
----
-
 ## Credits
 
 Developed by **Manan Gulati**
@@ -118,3 +109,13 @@ Arizona State University
 - [ ] Custom outfit image uploads
 - [ ] Smart notifications based on weather changes
 - [ ] Internationalization (i18n) support
+
+
+---
+
+## 🔐 API Key
+
+This app uses [WeatherAPI](https://www.weatherapi.com/). Register for a free API key and add it here:
+
+```swift
+let apiKey = "your-api-key"
