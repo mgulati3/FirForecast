@@ -510,7 +510,8 @@ struct HomeView: View {
                         Text("Recommended Outfit")
                             .font(.headline)
                             .foregroundColor(.white)
-                        Text("👕 + 🩳")
+
+                        Text(dynamicEmoji)
                             .font(.title2)
                             .bold()
                             .foregroundColor(.white)
@@ -522,8 +523,8 @@ struct HomeView: View {
                     NavigationLink("View Outfit Detail") {
                         OutfitDetailView(
                             outfit: Outfit(
-                                name: "Summer Vibes",
-                                description: "T-Shirt, Shorts, Sneakers",
+                                name: "Dynamic Look",
+                                description: "Tailored to your local weather.",
                                 imageName: "sun.max.fill"
                             )
                         )
@@ -550,7 +551,26 @@ struct HomeView: View {
             }
         }
     }
+
+    var dynamicEmoji: String {
+        let weather = viewModel.currentWeather.lowercased()
+
+        if weather.contains("snow") {
+            return "🧥 + 🧤"
+        } else if weather.contains("rain") || weather.contains("drizzle") {
+            return "🌂 + 🧥"
+        } else if weather.contains("cloud"){
+            return "🧢 + 🧥"
+        } else if weather.contains("sunny") || weather.contains("clear") {
+            return "👕 + 🩳"
+        } else if weather.contains("storm") {
+            return "🌩️ + 🧥"
+        } else {
+            return "🧥 + 👖"
+        }
+    }
 }
+
 
 // MARK: - Preferences View
 struct PreferencesView: View {
