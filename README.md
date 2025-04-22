@@ -1,5 +1,3 @@
-![LOGO](https://github.com/user-attachments/assets/4081967e-8d88-4e62-ae9e-b1ee42176d76)
-
 
 # ☀️ FitForecast
 
@@ -54,7 +52,7 @@
 
 ## 📸 App Logo
 
-![FitForecast Logo](./Assets.xcassets/AppIcon.appiconset/logo.png) <!-- Update this path as needed -->
+![LOGO](https://github.com/user-attachments/assets/4081967e-8d88-4e62-ae9e-b1ee42176d76)
 
 ---
 
