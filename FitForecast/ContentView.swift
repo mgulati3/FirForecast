@@ -9,6 +9,7 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import CoreData
+import EventKit
 
 // MARK: - MODEL
 
@@ -46,6 +47,37 @@ struct WeatherResponse: Codable {
         let icon: String
     }
     let current: Current
+}
+
+// Add after other model structs
+struct EventWithWeather: Identifiable {
+    let id: UUID = UUID()
+    let event: EKEvent
+    var weather: String
+    var recommendation: String
+    var emoji: String
+    
+    init(event: EKEvent, weather: String = "Loading...", recommendation: String = "Checking...", emoji: String = "🔄") {
+        self.event = event
+        self.weather = weather
+        self.recommendation = recommendation
+        self.emoji = emoji
+    }
+    
+    var title: String { event.title ?? "Untitled Event" }
+    var location: String { event.location ?? "No location" }
+    var startTime: Date { event.startDate }
+    var endTime: Date { event.endDate }
+    var isAllDay: Bool { event.isAllDay }
+    var timeRange: String {
+        if isAllDay {
+            return "All day"
+        } else {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            return "\(formatter.string(from: startTime)) - \(formatter.string(from: endTime))"
+        }
+    }
 }
 
 // MARK: - LOCATION MANAGER
@@ -97,6 +129,149 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if manager.authorizationStatus == .denied {
             locationPermissionDenied = true
+        }
+    }
+}
+
+class CalendarManager: NSObject, ObservableObject {
+    private let eventStore = EKEventStore()
+    @Published var todayEvents: [EventWithWeather] = []
+    @Published var calendarAccessGranted = false
+    @Published var isLoading = false
+    
+    override init() {
+        super.init()
+        checkCalendarAuthorization()
+    }
+    
+    func checkCalendarAuthorization() {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        
+        switch status {
+        case .authorized:
+            self.calendarAccessGranted = true
+            self.fetchTodayEvents()
+        case .notDetermined:
+            requestAccess()
+        case .denied, .restricted:
+            self.calendarAccessGranted = false
+        @unknown default:
+            self.calendarAccessGranted = false
+        }
+    }
+    
+    func requestAccess() {
+        eventStore.requestAccess(to: .event) { [weak self] granted, error in
+            DispatchQueue.main.async {
+                self?.calendarAccessGranted = granted
+                if granted {
+                    self?.fetchTodayEvents()
+                }
+            }
+        }
+    }
+    
+    func fetchTodayEvents() {
+        DispatchQueue.main.async {
+            self.isLoading = true
+        }
+        
+        let calendar = Calendar.current
+        let now = Date()
+        
+        // Get start and end of today
+        guard let startOfDay = calendar.date(bySettingHour: 0, minute: 0, second: 0, of: now),
+              let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: now) else {
+            return
+        }
+        
+        let predicate = eventStore.predicateForEvents(withStart: startOfDay,
+                                                     end: endOfDay,
+                                                     calendars: nil)
+        
+        let events = eventStore.events(matching: predicate)
+        
+        // Sort by start time
+        let sortedEvents = events.sorted { $0.startDate < $1.startDate }
+        
+        // Convert to our model
+        let eventsWithWeather = sortedEvents.map { EventWithWeather(event: $0) }
+        
+        DispatchQueue.main.async {
+            self.todayEvents = eventsWithWeather
+            self.isLoading = false
+        }
+    }
+    
+    func updateWeatherForEvents(cityName: String, weatherVM: OutfitViewModel) {
+        guard !todayEvents.isEmpty else { return }
+        
+        // This is a simplified version - ideally we would fetch hourly forecasts
+        // For simplicity, we'll use the current weather for all events
+        weatherVM.fetchWeather(for: cityName) { [weak self] weatherString in
+            guard let self = self, !weatherString.isEmpty else { return }
+            
+            DispatchQueue.main.async {
+                var updatedEvents = [EventWithWeather]()
+                
+                for var event in self.todayEvents {
+                    event.weather = weatherString
+                    
+                    // Generate recommendation based on weather
+                    let (recommendation, emoji) = self.generateRecommendation(for: weatherString,
+                                                                         eventTitle: event.title)
+                    event.recommendation = recommendation
+                    event.emoji = emoji
+                    
+                    updatedEvents.append(event)
+                }
+                
+                self.todayEvents = updatedEvents
+            }
+        }
+    }
+    
+    func generateRecommendation(for weather: String, eventTitle: String) -> (String, String) {
+        let lowerWeather = weather.lowercased()
+        let lowerTitle = eventTitle.lowercased()
+        
+        // Check if the event is likely outdoors
+        let outdoorKeywords = ["park", "hike", "walking", "run", "jog", "picnic", "outdoor", "garden"]
+        let isLikelyOutdoor = outdoorKeywords.contains { lowerTitle.contains($0) }
+        
+        // Generate recommendation based on weather and event type
+        if lowerWeather.contains("snow") {
+            return isLikelyOutdoor
+                ? ("Heavy winter clothes, boots, and gloves required!", "❄️🧤")
+                : ("Bring a warm coat and boots", "🧥👢")
+        } else if lowerWeather.contains("rain") || lowerWeather.contains("drizzle") {
+            return isLikelyOutdoor
+                ? ("Consider rescheduling this outdoor event!", "🌧️⚠️")
+                : ("Bring an umbrella and raincoat", "☔🧥")
+        } else if lowerWeather.contains("storm") {
+            return isLikelyOutdoor
+                ? ("RESCHEDULE! Unsafe for outdoor activities", "⛈️⚠️")
+                : ("Stay inside if possible. Heavy weather expected", "🏠⛈️")
+        } else if lowerWeather.contains("cloud") {
+            return isLikelyOutdoor
+                ? ("Light jacket recommended for this outdoor event", "☁️🧥")
+                : ("Consider a light jacket", "☁️")
+        } else if lowerWeather.contains("sunny") || lowerWeather.contains("clear") {
+            let tempParts = weather.components(separatedBy: "°F")
+            if let tempString = tempParts.first?.trimmingCharacters(in: .letters),
+               let temp = Int(tempString), temp > 75 {
+                return isLikelyOutdoor
+                    ? ("Hot weather! Sunscreen, hat, and light clothes needed", "☀️🧢")
+                    : ("Dress lightly and stay hydrated", "👕💧")
+            } else {
+                return isLikelyOutdoor
+                    ? ("Perfect weather for your outdoor event!", "☀️👍")
+                    : ("Enjoy the nice weather", "☀️")
+            }
+        } else {
+            return isLikelyOutdoor
+                ? ("Standard outfit should be fine for outdoors", "👟👖")
+                : ("Regular outfit should work well", "👔👖")
         }
     }
 }
@@ -190,6 +365,57 @@ class OutfitViewModel: ObservableObject {
             }
         }.resume()
     }
+    func fetchWeather(for city: String, completion: ((String) -> Void)? = nil) {
+            DispatchQueue.main.async { self.isLoading = true }
+            let apiKey = "de0c0e5ab35f416a88b53710252004"
+            let q = city.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? city
+            guard let url = URL(string: "https://api.weatherapi.com/v1/current.json?key=\(apiKey)&q=\(q)") else {
+                let errorMessage = "Invalid city"
+                DispatchQueue.main.async {
+                    self.currentWeather = errorMessage
+                    self.isLoading = false
+                    completion?(errorMessage)
+                }
+                return
+            }
+
+            URLSession.shared.dataTask(with: url) { data, _, error in
+                defer { DispatchQueue.main.async { self.isLoading = false } }
+
+                if let err = error {
+                    let errorMessage = "Error: \(err.localizedDescription)"
+                    DispatchQueue.main.async {
+                        self.currentWeather = errorMessage
+                        completion?(errorMessage)
+                    }
+                    return
+                }
+                guard let data = data else {
+                    let errorMessage = "No data"
+                    DispatchQueue.main.async {
+                        self.currentWeather = errorMessage
+                        completion?(errorMessage)
+                    }
+                    return
+                }
+                do {
+                    let decoded = try JSONDecoder().decode(WeatherResponse.self, from: data)
+                    let temp = Int(decoded.current.temp_f)
+                    let cond = decoded.current.condition.text
+                    let weatherString = "\(temp)°F, \(cond)"
+                    DispatchQueue.main.async {
+                        self.currentWeather = weatherString
+                        completion?(weatherString)
+                    }
+                } catch {
+                    let errorMessage = "Decode failed"
+                    DispatchQueue.main.async {
+                        self.currentWeather = errorMessage
+                        completion?(errorMessage)
+                    }
+                }
+            }.resume()
+    }
 }
 
 class PreferencesViewModel: ObservableObject {
@@ -269,6 +495,9 @@ struct ContentView: View {
             NavigationStack { WelcomeView() }
                 .tabItem { Label("Home", systemImage: "house") }
 
+            NavigationStack { CalendarEventsView() }
+                .tabItem { Label("Events", systemImage: "calendar") }
+
             NavigationStack { SavedOutfitsView() }
                 .tabItem { Label("Saved", systemImage: "star.fill") }
 
@@ -278,7 +507,7 @@ struct ContentView: View {
         .environmentObject(OutfitViewModel(context: viewContext))
         .environmentObject(locationManager)
         .environmentObject(PreferencesViewModel(context: viewContext))
-        .preferredColorScheme(isDarkMode ? .dark : .light)           // ← apply scheme
+        .preferredColorScheme(isDarkMode ? .dark : .light)
     }
 }
 
@@ -653,6 +882,142 @@ struct SavedOutfitsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - CALENDAR EVENTS VIEW
+
+struct CalendarEventsView: View {
+    @StateObject private var calendarManager = CalendarManager()
+    @EnvironmentObject private var locationManager: LocationManager
+    @EnvironmentObject private var weatherViewModel: OutfitViewModel
+    
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            
+            VStack {
+                if !calendarManager.calendarAccessGranted {
+                    VStack(spacing: 20) {
+                        Image(systemName: "calendar.badge.exclamationmark")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 80, height: 80)
+                            .foregroundColor(.orange)
+                        
+                        Text("Calendar Access Required")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        Text("FitForecast needs access to your calendar to provide outfit recommendations for your events.")
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        
+                        Button("Grant Access") {
+                            calendarManager.requestAccess()
+                        }
+                        .buttonStyle(RoundedGradientButtonStyle())
+                        .padding(.top)
+                    }
+                    .padding()
+                } else if calendarManager.isLoading {
+                    ProgressView("Loading your events...")
+                        .progressViewStyle(CircularProgressViewStyle())
+                        .scaleEffect(1.5)
+                } else if calendarManager.todayEvents.isEmpty {
+                    VStack(spacing: 15) {
+                        Image(systemName: "calendar")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 60, height: 60)
+                            .foregroundColor(.gray)
+                        
+                        Text("No events scheduled for today")
+                            .font(.headline)
+                        
+                        Text("Enjoy your free day!")
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    List {
+                        ForEach(calendarManager.todayEvents) { eventWithWeather in
+                            EventRow(event: eventWithWeather)
+                        }
+                    }
+                    .listStyle(InsetGroupedListStyle())
+                    .refreshable {
+                        calendarManager.fetchTodayEvents()
+                        if !locationManager.currentCity.isEmpty {
+                            calendarManager.updateWeatherForEvents(cityName: locationManager.currentCity, weatherVM: weatherViewModel)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Today's Events")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        calendarManager.fetchTodayEvents()
+                        if !locationManager.currentCity.isEmpty {
+                            calendarManager.updateWeatherForEvents(cityName: locationManager.currentCity, weatherVM: weatherViewModel)
+                        }
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+            .onAppear {
+                if !locationManager.currentCity.isEmpty {
+                    calendarManager.updateWeatherForEvents(cityName: locationManager.currentCity, weatherVM: weatherViewModel)
+                }
+            }
+        }
+    }
+}
+
+// Helper view for displaying individual events
+struct EventRow: View {
+    let event: EventWithWeather
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(event.title)
+                    .font(.headline)
+                
+                Spacer()
+                
+                Text(event.emoji)
+                    .font(.title3)
+            }
+            
+            if !event.location.isEmpty && event.location != "No location" {
+                Label(event.location, systemImage: "mappin.and.ellipse")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            HStack {
+                Label(event.timeRange, systemImage: "clock")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                Label(event.weather, systemImage: "cloud.sun.fill")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Divider()
+            
+            Text("Suggestion: \(event.recommendation)")
+                .font(.footnote)
+                .padding(8)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(5)
+        }
+        .padding(.vertical, 5)
     }
 }
 
