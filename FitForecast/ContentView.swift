@@ -204,24 +204,25 @@ class CalendarManager: NSObject, ObservableObject {
     }
     
     func updateWeatherForEvents(cityName: String, weatherVM: OutfitViewModel) {
-        guard !todayEvents.isEmpty else { return }
-        
-        // This is a simplified version - ideally we would fetch hourly forecasts
-        // For simplicity, we'll use the current weather for all events
-        weatherVM.fetchWeather(for: cityName) { [weak self] weatherString in
-            guard let self = self, !weatherString.isEmpty else { return }
+        weatherVM.fetchHourlyWeather(for: cityName) { [weak self] hourlyForecast in
+            guard let self = self else { return }
             
             DispatchQueue.main.async {
-                var updatedEvents = [EventWithWeather]()
+                var updatedEvents: [EventWithWeather] = []
                 
                 for var event in self.todayEvents {
-                    event.weather = weatherString
+                    let nearestHour = hourlyForecast.keys.min(by: {
+                        abs($0.timeIntervalSince(event.startTime)) < abs($1.timeIntervalSince(event.startTime))
+                    })
                     
-                    // Generate recommendation based on weather
-                    let (recommendation, emoji) = self.generateRecommendation(for: weatherString,
-                                                                         eventTitle: event.title)
-                    event.recommendation = recommendation
-                    event.emoji = emoji
+                    if let matchedTime = nearestHour, let forecast = hourlyForecast[matchedTime] {
+                        event.weather = forecast
+                        let (recommendation, emoji) = self.generateRecommendation(for: forecast, eventTitle: event.title)
+                        event.recommendation = recommendation
+                        event.emoji = emoji
+                    } else {
+                        event.weather = "No forecast"
+                    }
                     
                     updatedEvents.append(event)
                 }
@@ -331,6 +332,13 @@ class OutfitViewModel: ObservableObject {
             savedOutfits = []
         }
     }
+    
+    func isDuplicate(_ outfit: Outfit) -> Bool {
+        savedOutfits.contains {
+           $0.name == outfit.name &&
+           $0.location == outfit.location
+        }
+    }
 
     func fetchWeather(for city: String) {
         DispatchQueue.main.async { self.isLoading = true } // ← start spinner
@@ -365,56 +373,61 @@ class OutfitViewModel: ObservableObject {
             }
         }.resume()
     }
-    func fetchWeather(for city: String, completion: ((String) -> Void)? = nil) {
-            DispatchQueue.main.async { self.isLoading = true }
-            let apiKey = "de0c0e5ab35f416a88b53710252004"
-            let q = city.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? city
-            guard let url = URL(string: "https://api.weatherapi.com/v1/current.json?key=\(apiKey)&q=\(q)") else {
-                let errorMessage = "Invalid city"
-                DispatchQueue.main.async {
-                    self.currentWeather = errorMessage
-                    self.isLoading = false
-                    completion?(errorMessage)
-                }
-                return
+    func fetchHourlyWeather(for city: String,
+                            completion: @escaping ([Date:String]) -> Void)
+    {
+        DispatchQueue.main.async { self.isLoading = true }
+        let apiKey = "de0c0e5ab35f416a88b53710252004"
+        let q = city.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? city
+        guard let url = URL(string:
+          "https://api.weatherapi.com/v1/forecast.json?key=\(apiKey)&q=\(q)&days=1"
+        ) else {
+            DispatchQueue.main.async { self.isLoading = false }
+            completion([:]); return
+        }
+
+        URLSession.shared.dataTask(with: url) { data, _, err in
+          defer { DispatchQueue.main.async { self.isLoading = false } }
+          guard let data = data, err == nil else {
+            completion([:]); return
+          }
+
+          // for debugging:
+          print("RAW JSON →", String(data:data, encoding:.utf8)!)
+
+          do {
+            let json = try JSONSerialization.jsonObject(with: data) as? [String:Any]
+            guard
+              let forecast = json?["forecast"] as? [String:Any],
+              let days     = forecast["forecastday"] as? [[String:Any]],
+              let hours   = days.first?["hour"] as? [[String:Any]]
+            else {
+              completion([:]); return
             }
 
-            URLSession.shared.dataTask(with: url) { data, _, error in
-                defer { DispatchQueue.main.async { self.isLoading = false } }
+            var result: [Date:String] = [:]
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd HH:mm"
+            fmt.timeZone = .current  // or your target zone
 
-                if let err = error {
-                    let errorMessage = "Error: \(err.localizedDescription)"
-                    DispatchQueue.main.async {
-                        self.currentWeather = errorMessage
-                        completion?(errorMessage)
-                    }
-                    return
-                }
-                guard let data = data else {
-                    let errorMessage = "No data"
-                    DispatchQueue.main.async {
-                        self.currentWeather = errorMessage
-                        completion?(errorMessage)
-                    }
-                    return
-                }
-                do {
-                    let decoded = try JSONDecoder().decode(WeatherResponse.self, from: data)
-                    let temp = Int(decoded.current.temp_f)
-                    let cond = decoded.current.condition.text
-                    let weatherString = "\(temp)°F, \(cond)"
-                    DispatchQueue.main.async {
-                        self.currentWeather = weatherString
-                        completion?(weatherString)
-                    }
-                } catch {
-                    let errorMessage = "Decode failed"
-                    DispatchQueue.main.async {
-                        self.currentWeather = errorMessage
-                        completion?(errorMessage)
-                    }
-                }
-            }.resume()
+            for entry in hours {
+              if
+                let ts   = entry["time"] as? String,
+                let date = fmt.date(from: ts),
+                let temp = entry["temp_f"] as? Double,
+                let cond = (entry["condition"] as? [String:Any])?["text"] as? String
+              {
+                result[date] = "\(Int(temp))°F, \(cond)"
+                print("Parsed →", fmt.string(from: date), result[date]!)
+              }
+            }
+
+            completion(result)
+          } catch {
+            print("JSON error:", error)
+            completion([:])
+          }
+        }.resume()
     }
 }
 
@@ -710,6 +723,7 @@ struct OutfitDetailView: View {
     @EnvironmentObject var locationManager: LocationManager
     let outfit: Outfit
     @State private var showSaveConfirmation = false
+    @State private var showDuplicateAlert   = false
 
     var body: some View {
         ZStack {
@@ -753,8 +767,12 @@ struct OutfitDetailView: View {
                         imageName: outfit.imageName,
                         location: city
                     )
-                    viewModel.saveOutfit(toSave)
-                    showSaveConfirmation = true
+                    if viewModel.isDuplicate(toSave) {
+                        showDuplicateAlert = true
+                    }else{
+                        viewModel.saveOutfit(toSave)
+                        showSaveConfirmation = true
+                    }
                 }
                 .buttonStyle(RoundedGradientButtonStyle())
                 .padding(.top, 20)
@@ -766,6 +784,15 @@ struct OutfitDetailView: View {
             .navigationDestination(isPresented: $showSaveConfirmation) {
                 OutfitSavedConfirmationView()
             }
+        }
+        
+        .alert(
+            "Already Saved",
+            isPresented: $showDuplicateAlert
+        ){
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("You've already saved this outfit.")
         }
     }
 
